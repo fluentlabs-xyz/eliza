@@ -18,7 +18,7 @@ import {
 
 export class EventHandler implements IEventHandler {
     private readonly eventAbi: AbiEvent;
-
+    private lastProcessedBlock: number = 0;
     constructor(
         private readonly config: EventConfig,
         private readonly runtime: IAgentRuntime,
@@ -28,6 +28,15 @@ export class EventHandler implements IEventHandler {
     }
 
     async handle(log: Log): Promise<void> {
+        const blockNumber = Number(log.blockNumber);
+        if (blockNumber <= this.lastProcessedBlock) {
+            elizaLogger.debug("Block already processed", {
+                blockNumber,
+                lastProcessed: this.lastProcessedBlock
+            });
+            return;
+        }
+
         try {
             const chainId = await this.client.getChainId();
 
@@ -65,6 +74,7 @@ export class EventHandler implements IEventHandler {
                 transactionHash: log.transactionHash,
             });
             await this.processMemory(memory);
+            this.lastProcessedBlock = blockNumber;
         } catch (error) {
             elizaLogger.error("Failed to handle event:", {
                 error:
@@ -150,7 +160,6 @@ export class EventHandler implements IEventHandler {
 
         await this.runtime.messageManager.createMemory(memory);
 
-        // Создаем состояние
         const state = await this.runtime.composeState(memory, {
             chainId: content.id.chainId,
             contract: content.config.contractAddress,
@@ -158,7 +167,6 @@ export class EventHandler implements IEventHandler {
             agentName: this.runtime.character?.name,
         });
 
-        // Обрабатываем действия и оцениваем
         await Promise.all([
             this.runtime.processActions(memory, [memory], state),
             this.runtime.evaluate(memory, state, true),

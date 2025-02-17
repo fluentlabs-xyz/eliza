@@ -29,7 +29,7 @@ export const defaultConfig = {
     } satisfies TransportConfig,
 
     sync: {
-        batchSize: 100,     // Number of blocks per batch
-        confirmations: 12   // Required block confirmations
+        batchSize: 1000,     // Number of blocks per batch
+        confirmations: 2   // Required block confirmations
     } satisfies SyncConfig
 } as const;

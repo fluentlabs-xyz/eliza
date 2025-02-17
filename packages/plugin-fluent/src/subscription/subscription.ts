@@ -100,7 +100,7 @@ export class Subscription implements ISubscription {
             }
 
             if (startBlock < currentBlock && !options?.fromNow) {
-                await this.syncFromBlock(startBlock, currentBlock);
+                await this.syncFromBlock(startBlock, currentBlock - BigInt(1));
             }
 
             this.startListening(currentBlock + 1n);
