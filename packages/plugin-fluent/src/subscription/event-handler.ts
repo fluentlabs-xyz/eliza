@@ -3,11 +3,10 @@ import {
     Log,
     PublicClient,
     parseEventLogs,
-    decodeEventLog,
     parseAbi,
-    AbiEvent,
+    type AbiEvent,
 } from "viem";
-import { contractRoomId, eventId } from "../utils";
+import { contractRoomId, eventId, normalizeEventArgs } from "../utils";
 import {
     ContentType,
     EventConfig,
@@ -18,25 +17,33 @@ import {
 } from "./types";
 
 export class EventHandler implements IEventHandler {
+    private readonly eventAbi: AbiEvent;
+
     constructor(
         private readonly config: EventConfig,
         private readonly runtime: IAgentRuntime,
         private readonly client: PublicClient
-    ) {}
+    ) {
+        this.eventAbi = parseAbi([this.config.signature])[0] as AbiEvent;
+    }
 
     async handle(log: Log): Promise<void> {
         try {
             const chainId = await this.client.getChainId();
+
             elizaLogger.info("Handling event", {
-                config: this.config,
+                config: this.config.signature,
                 blockNumber: log.blockNumber?.toString(),
                 transactionHash: log.transactionHash,
             });
-            const parsed = parseEventLogs({
-                abi: [this.config.signature],
+
+            const parsedLogs = parseEventLogs({
+                abi: [this.eventAbi],
                 logs: [log],
-            })[0];
-            if (!parsed) {
+                strict: true,
+            });
+
+            if (!parsedLogs.length) {
                 throw new SubscriptionError(
                     "Failed to parse event log",
                     SubscriptionErrorType.DECODE,
@@ -44,28 +51,34 @@ export class EventHandler implements IEventHandler {
                 );
             }
 
-            const decoded = decodeEventLog({
-                abi: [this.config.signature],
-                data: parsed.data,
-                topics: parsed.topics || [],
+            const parsedEvent = parsedLogs[0];
+            elizaLogger.info("Parsed event", {
+                eventName: parsedEvent.eventName,
+                blockNumber: parsedEvent.blockNumber,
+                transactionHash: parsedEvent.transactionHash,
             });
-            if (!decoded) {
-                throw new SubscriptionError(
-                    "Failed to decode event log",
-                    SubscriptionErrorType.DECODE,
-                    { log }
-                );
-            }
 
-            const memory = await this.createMemory(parsed, decoded, chainId);
-
+            const memory = await this.createMemory(parsedEvent, chainId);
+            elizaLogger.debug("Created memory", {
+                eventName: parsedEvent.eventName,
+                blockNumber: log.blockNumber?.toString(),
+                transactionHash: log.transactionHash,
+            });
             await this.processMemory(memory);
         } catch (error) {
             elizaLogger.error("Failed to handle event:", {
-                error,
+                error:
+                    error instanceof Error
+                        ? {
+                              message: error.message,
+                              stack: error.stack,
+                              ...error,
+                          }
+                        : error,
                 config: this.config,
                 blockNumber: log.blockNumber?.toString(),
                 transactionHash: log.transactionHash,
+                logData: log.data,
             });
 
             if (
@@ -78,51 +91,66 @@ export class EventHandler implements IEventHandler {
     }
 
     private async createMemory(
-        parsed: Log,
-        decoded: any,
+        event: Log & { eventName: string; args: Record<string, any> },
         chainId: number
     ): Promise<Memory> {
-        elizaLogger.info("Creating memory", {
-            config: this.config,
-            blockNumber: parsed.blockNumber,
-            transactionHash: parsed.transactionHash,
-            decoded,
-            parsed,
-        });
+        try {
+            const normalizedArgs = normalizeEventArgs(event.args);
+            const normalizedEvent = normalizeEventArgs(event);
 
-        const eventContent: EventContent = {
-            type: ContentType.EVENT,
-            id: {
-                chainId,
-                blockNumber: Number(parsed.blockNumber),
-                transactionHash: parsed.transactionHash,
-                logIndex: parsed.logIndex,
-            },
-            config: this.config,
-            args: decoded.args,
-            action: decoded.eventName,
-            raw: parsed,
-            text: `New Event ${decoded.eventName} from ${
-                this.config.contractAddress
-            }: ${JSON.stringify(decoded.args)}`,
-        };
+            const eventContent: EventContent = {
+                type: ContentType.EVENT,
+                id: {
+                    chainId: Number(chainId),
+                    blockNumber: Number(event.blockNumber),
+                    transactionHash: event.transactionHash,
+                    logIndex: Number(event.logIndex),
+                },
+                config: this.config,
+                args: normalizedArgs,
+                action: event.eventName,
+                raw: normalizedEvent,
+                text: `Event ${event.eventName} from ${
+                    this.config.contractAddress
+                }: ${Object.entries(normalizedArgs)
+                    .map(([key, value]) => `${key}=${value}`)
+                    .join(", ")}`,
+            };
 
-        return {
-            id: eventId(eventContent.id),
-            userId: this.runtime.agentId,
-            agentId: this.runtime.agentId,
-            roomId: contractRoomId(chainId, this.config.contractAddress),
-            content: eventContent,
-            createdAt: Date.now(),
-        };
+            return {
+                id: eventId(eventContent.id),
+                userId: this.runtime.agentId,
+                agentId: this.runtime.agentId,
+                roomId: contractRoomId(chainId, this.config.contractAddress),
+                content: eventContent,
+                createdAt: Date.now(),
+            };
+        } catch (error) {
+            elizaLogger.error("Failed to create memory:", {
+                error:
+                    error instanceof Error
+                        ? {
+                              message: error.message,
+                              stack: error.stack,
+                              name: error.name,
+                          }
+                        : error,
+                eventData: {
+                    args: event.args,
+                    blockNumber: event.blockNumber?.toString(),
+                    logIndex: event.logIndex?.toString(),
+                },
+            });
+            throw error;
+        }
     }
 
     private async processMemory(memory: Memory): Promise<void> {
         const content = memory.content as EventContent;
 
-        await this.runtime.messageManager.addEmbeddingToMemory(memory);
         await this.runtime.messageManager.createMemory(memory);
 
+        // Создаем состояние
         const state = await this.runtime.composeState(memory, {
             chainId: content.id.chainId,
             contract: content.config.contractAddress,
@@ -130,8 +158,9 @@ export class EventHandler implements IEventHandler {
             agentName: this.runtime.character?.name,
         });
 
+        // Обрабатываем действия и оцениваем
         await Promise.all([
-            this.runtime.processActions(memory, [], state),
+            this.runtime.processActions(memory, [memory], state),
             this.runtime.evaluate(memory, state, true),
         ]);
     }

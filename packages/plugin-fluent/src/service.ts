@@ -14,13 +14,14 @@ import {
     Subscription,
     ServiceHealth,
     SubscriptionStatus,
+    StartOptions,
 } from "./subscription";
 import { SubscriptionStorage } from "./subscription/storage";
 import { createViemClient, subscriptionId } from "./utils";
 
 export interface IFluentService extends Service {
     initialize(runtime: IAgentRuntime): Promise<void>;
-    start(): Promise<void>;
+    start(options?: StartOptions): Promise<void>;
     stop(): Promise<void>;
     getClient(): PublicClient | null;
     checkHealth(): Promise<ServiceHealth>;
@@ -105,11 +106,11 @@ export class FluentService extends Service implements IFluentService {
         }
     }
 
-    async start(): Promise<void> {
+    async start(options?: StartOptions): Promise<void> {
         elizaLogger.info("Starting Fluent service subscriptions...");
 
         for (const subscription of this.subscriptions.values()) {
-            await subscription.start();
+            await subscription.start(options);
         }
 
         elizaLogger.info("Fluent service subscriptions started");

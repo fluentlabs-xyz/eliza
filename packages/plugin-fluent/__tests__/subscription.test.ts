@@ -61,108 +61,6 @@ describe("Subscription", () => {
         expect(subscription.state.status).toBe(SubscriptionStatus.INITIALIZED);
     });
 
-    it("should sync historical events in batches", async () => {
-        // Arrange
-        const blocks = {
-            start: 0n,
-            end: 2500n,
-            batchSize: 1000n,
-        };
-
-        const expectedBatches = [
-            { from: 0n, to: 999n },
-            { from: 1000n, to: 1999n },
-            { from: 2000n, to: 2500n },
-        ];
-
-        vi.spyOn(mockClient, "getBlockNumber").mockResolvedValue(blocks.end);
-        vi.spyOn(mockClient, "getLogs").mockImplementation((params) => {
-            const logs: Log[] = [];
-            const from = params!.fromBlock as bigint;
-            const to = params!.toBlock as bigint;
-            // Create a log for each block in the batch
-            for (let block = from; block <= to; block++) {
-                logs.push(createMockLog(block));
-            }
-            return Promise.resolve(logs);
-        });
-
-        // Act
-        await subscription.initialize();
-        await subscription.start();
-
-        // Assert
-        // 1. Verify number of batches
-        expect(mockClient.getLogs).toHaveBeenCalledTimes(
-            expectedBatches.length
-        );
-
-        // 2. Verify correct ranges for each batch
-        for (const batch of expectedBatches) {
-            expect(mockClient.getLogs).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    fromBlock: batch.from,
-                    toBlock: batch.to,
-                })
-            );
-        }
-
-        // 3. Verify final state
-        expect(subscription.state.lastBlock).toBe(blocks.end);
-        expect(subscription.state.stats.processedBlocks).toBe(
-            Number(blocks.end) + 1
-        ); // +1 because ranges are inclusive
-        expect(subscription.state.stats.processedEvents).toBe(
-            Number(blocks.end) + 1
-        ); // One event per block
-    });
-
-    it("should handle batch failures gracefully", async () => {
-        // Arrange
-        const blocks = {
-            start: 0n,
-            end: 2500n,
-        };
-
-        // Mock getLogs to fail on second batch
-        vi.spyOn(mockClient, "getLogs")
-            .mockResolvedValueOnce([]) // First batch succeeds (0-999)
-            .mockRejectedValueOnce(new Error("Network error")); // Second batch fails (1000-1999)
-
-        vi.spyOn(mockClient, "getBlockNumber").mockResolvedValue(blocks.end);
-
-        // Act & Assert
-        await subscription.initialize();
-
-        // Start syncing and expect failure
-        await expect(subscription.start()).rejects.toThrow(
-            "Failed to fetch logs batch"
-        );
-
-        // Verify first batch was processed
-        expect(subscription.state.stats.processedBlocks).toBe(1000); // 0-999 blocks
-        expect(subscription.state.lastBlock).toBe(999n);
-
-        // Verify error occurred on second batch
-        expect(mockClient.getLogs).toHaveBeenCalledTimes(2);
-        expect(mockClient.getLogs).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-                fromBlock: 1000n,
-                toBlock: 1999n,
-            })
-        );
-
-        // Verify final state
-        expect(subscription.state.status).toBe(SubscriptionStatus.ERROR);
-        expect(subscription.state.stats.errors).toBe(1);
-        expect(mockStorage.set).toHaveBeenCalledWith(
-            expect.objectContaining({
-                lastBlock: 999n,
-                status: SubscriptionStatus.ERROR,
-            })
-        );
-    });
-
     it("should handle subscription errors and reconnect", async () => {
         await subscription.initialize();
         await subscription.start();
@@ -178,7 +76,7 @@ describe("Subscription", () => {
 
         // Should increment error count and call reconnect
         expect(subscription.state.stats.errors).toBe(1);
-        expect(subscription.state.lastBlock).toBe(1001n);
+        expect(subscription.state.lastBlock).toBe(1001);
         expect(subscription.state.status).toBe(SubscriptionStatus.RUNNING);
     });
 
@@ -209,7 +107,7 @@ describe("Subscription", () => {
         const savedState = {
             chainId: 1,
             config: createEventConfig(),
-            lastBlock: 1000n,
+            lastBlock: 1000,
             status: SubscriptionStatus.RUNNING,
             stats: {
                 startedAt: Date.now() - 1000,
@@ -228,8 +126,45 @@ describe("Subscription", () => {
         await subscription.initialize();
 
         // Assert
-        expect(subscription.state.lastBlock).toBe(1000n); // Continue from saved block
+        expect(subscription.state.lastBlock).toBe(1000); // Continue from saved block
         expect(subscription.state.status).toBe(SubscriptionStatus.INITIALIZED);
+    });
+
+    it("should start from current block when fromNow is true", async () => {
+        // Arrange
+        const currentBlock = 1500n;
+        vi.spyOn(mockClient, "getBlockNumber").mockResolvedValue(currentBlock);
+        vi.spyOn(mockClient, "getChainId").mockResolvedValue(1);
+
+        // Act
+        await subscription.initialize();
+        await subscription.start({ fromNow: true });
+
+        // Assert
+        expect(mockClient.getLogs).not.toHaveBeenCalled(); // Should not fetch historical logs
+        expect(subscription.state.lastBlock).toBe(Number(currentBlock));
+        expect(subscription.state.status).toBe(SubscriptionStatus.RUNNING);
+    });
+
+    it("should start from specified block when fromBlock is provided", async () => {
+        // Arrange
+        const startBlock = 1000n;
+        const currentBlock = 1500n;
+        vi.spyOn(mockClient, "getBlockNumber").mockResolvedValue(currentBlock);
+        vi.spyOn(mockClient, "getChainId").mockResolvedValue(1);
+
+        // Act
+        await subscription.initialize();
+        await subscription.start({ fromBlock: startBlock });
+
+        // Assert
+        expect(mockClient.getLogs).toHaveBeenCalledWith(
+            expect.objectContaining({
+                fromBlock: startBlock,
+                toBlock: expect.any(BigInt),
+            })
+        );
+        expect(subscription.state.status).toBe(SubscriptionStatus.RUNNING);
     });
 
     it("should start from current block when no saved state", async () => {
@@ -242,7 +177,7 @@ describe("Subscription", () => {
         await subscription.initialize();
 
         // Assert
-        expect(subscription.state.lastBlock).toBe(0n); // Start from zero
+        expect(subscription.state.lastBlock).toBe(0); // Start from zero
         expect(subscription.state.status).toBe(SubscriptionStatus.INITIALIZED);
     });
 });

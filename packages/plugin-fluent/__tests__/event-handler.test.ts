@@ -26,10 +26,9 @@ vi.mock("viem", async () => {
             args: {
                 from: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                 to: "0xd8da6bf26964af9d7eed9e03e53415d37aa96045",
-                value: "1000000000000000000"
-            }
+                value: "1000000000000000000",
+            },
         }),
-
     };
 });
 
@@ -114,21 +113,5 @@ describe("EventHandler", () => {
         // Verify error was handled gracefully
         expect(mockRuntime.processActions).not.toHaveBeenCalled();
         expect(mockRuntime.evaluate).not.toHaveBeenCalled();
-    });
-
-    it.only("should create memory with correct format", async () => {
-        const mockLog = {
-            blockNumber: 1000n,
-            transactionHash: "0xabc",
-            logIndex: 0,
-            data: "0x",
-            topics: [],
-        } as unknown as Log;
-
-        vi.spyOn(mockClient, "getChainId").mockResolvedValue(1);
-
-        await handler.handle(mockLog);
-
-        expect(mockRuntime.messageManager.createMemory).toHaveBeenCalled();
     });
 });

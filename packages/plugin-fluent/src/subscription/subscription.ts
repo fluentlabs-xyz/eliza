@@ -8,6 +8,7 @@ import {
     SubscriptionStatus,
     SubscriptionError,
     SubscriptionErrorType,
+    StartOptions,
 } from "./types";
 import { EventHandler } from "./event-handler";
 
@@ -77,12 +78,29 @@ export class Subscription implements ISubscription {
         }
     }
 
-    async start(): Promise<void> {
+    async start(options?: StartOptions): Promise<void> {
+        elizaLogger.info("Starting subscription", {
+            config: this.config,
+            options,
+        });
+
         try {
             const currentBlock = await this.getCurrentBlock();
 
-            if (this._state.lastBlock < currentBlock) {
-                await this.syncFromBlock(BigInt(this._state.lastBlock), currentBlock);
+            let startBlock: bigint;
+            if (options?.fromNow) {
+                startBlock = currentBlock;
+                this._state.lastBlock = Number(currentBlock);
+            } else if (options?.fromBlock !== undefined) {
+                startBlock = options.fromBlock;
+            } else if (this._state.lastBlock > 0) {
+                startBlock = BigInt(this._state.lastBlock);
+            } else {
+                startBlock = currentBlock;
+            }
+
+            if (startBlock < currentBlock && !options?.fromNow) {
+                await this.syncFromBlock(startBlock, currentBlock);
             }
 
             this.startListening(currentBlock + 1n);
@@ -113,6 +131,10 @@ export class Subscription implements ISubscription {
         fromBlock: bigint,
         toBlock: bigint
     ): Promise<void> {
+        elizaLogger.info("syncFromBlock", {
+            fromBlock: fromBlock.toString(),
+            toBlock: toBlock.toString(),
+        });
         await this.updateState(SubscriptionStatus.SYNCING);
         let currentBlock = fromBlock;
 
@@ -231,7 +253,10 @@ export class Subscription implements ISubscription {
                     config: this.config,
                 });
 
-                await this.syncFromBlock(BigInt(this._state.lastBlock), currentBlock);
+                await this.syncFromBlock(
+                    BigInt(this._state.lastBlock),
+                    currentBlock
+                );
             }
 
             this.startListening(currentBlock + 1n);

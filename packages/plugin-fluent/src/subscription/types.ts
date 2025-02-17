@@ -90,10 +90,15 @@ export interface IEventHandler {
 /**
  * Subscription interface
  */
+export interface StartOptions {
+    fromNow?: boolean;        // If true - start from current block
+    fromBlock?: bigint;       // Optional starting block
+}
+
 export interface ISubscription {
     readonly state: SubscriptionState;
     initialize(): Promise<void>;
-    start(): Promise<void>;
+    start(options?: StartOptions): Promise<void>;
     stop(): Promise<void>;
     reconnect(): Promise<void>;
 }
